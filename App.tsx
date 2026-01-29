@@ -5,6 +5,7 @@ import Sidebar from './components/Sidebar';
 import { ExtractionMode, ExtractionResult, Project } from './types';
 import { parseHtml } from './services/parserService';
 import { getProjects, saveProject, deleteProject, generateId } from './services/storageService';
+import { extractFigmaData } from './services/geminiService';
 
 const App: React.FC = () => {
   // Global App State
@@ -19,6 +20,10 @@ const App: React.FC = () => {
   const [limit, setLimit] = useState<number>(10);
   const [result, setResult] = useState<ExtractionResult | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [isAiExtracting, setIsAiExtracting] = useState(false);
+  
+  // Mobile Sidebar Toggle
+  const [showMobileSidebar, setShowMobileSidebar] = useState(false);
 
   // Load projects on mount
   useEffect(() => {
@@ -36,6 +41,7 @@ const App: React.FC = () => {
       setMode(project.config.mode);
       setLimit(project.config.limit);
       setResult(project.lastResult);
+      setShowMobileSidebar(false);
     }
   };
 
@@ -48,6 +54,7 @@ const App: React.FC = () => {
     setMode(ExtractionMode.AUTO);
     setLimit(10);
     setResult(null);
+    setShowMobileSidebar(false);
   };
 
   // Handle Deletion
@@ -62,7 +69,7 @@ const App: React.FC = () => {
     }
   };
 
-  // Run Extraction
+  // Run Extraction (Local DOM)
   const handleExtract = () => {
     const extractedData = parseHtml({
       html,
@@ -71,6 +78,30 @@ const App: React.FC = () => {
       limit
     });
     setResult(extractedData);
+  };
+
+  // Run Extraction (AI Gemini for Figma)
+  const handleAiExtract = async () => {
+    if (!html) {
+      alert("Vui lòng nhập HTML trước.");
+      return;
+    }
+    
+    setIsAiExtracting(true);
+    try {
+      const items = await extractFigmaData(html);
+      setResult({
+        items,
+        totalFound: items.length,
+        requested: limit,
+        message: `AI đã tìm thấy ${items.length} sản phẩm theo chuẩn Figma Sync (BookName, #image).`
+      });
+    } catch (error) {
+      alert("Lỗi khi bóc tách bằng AI. Vui lòng thử lại.");
+      console.error(error);
+    } finally {
+      setIsAiExtracting(false);
+    }
   };
 
   // Save Project
@@ -101,31 +132,40 @@ const App: React.FC = () => {
   };
 
   return (
-    <div className="flex h-screen bg-gray-50 overflow-hidden font-sans">
+    <div className="flex flex-col lg:flex-row h-screen bg-gray-50 overflow-hidden font-sans">
       
-      {/* Sidebar Navigation */}
-      <Sidebar 
-        projects={projects}
-        currentProjectId={currentProjectId}
-        onSelectProject={handleSelectProject}
-        onNewProject={handleNewProject}
-        onDeleteProject={handleDeleteProject}
-      />
+      {/* Sidebar Navigation - Hidden on mobile unless toggled */}
+      <div className={`fixed inset-0 z-50 bg-gray-800/50 lg:hidden ${showMobileSidebar ? 'block' : 'hidden'}`} onClick={() => setShowMobileSidebar(false)}></div>
+      <div className={`fixed inset-y-0 left-0 z-50 w-64 transform transition-transform duration-300 lg:relative lg:translate-x-0 ${showMobileSidebar ? 'translate-x-0' : '-translate-x-full'}`}>
+        <Sidebar 
+          projects={projects}
+          currentProjectId={currentProjectId}
+          onSelectProject={handleSelectProject}
+          onNewProject={handleNewProject}
+          onDeleteProject={handleDeleteProject}
+        />
+      </div>
 
       {/* Main Content Area */}
-      <div className="flex-1 flex flex-col h-full min-w-0 overflow-hidden">
+      <div className="flex-1 flex flex-col min-w-0 h-full">
         
-        {/* Mobile Header (Only visible on small screens - simplified) */}
-        <header className="bg-white border-b border-gray-200 p-4 md:hidden flex justify-between items-center">
-             <span className="font-bold text-indigo-700">Extractor CRM</span>
-             <button className="text-gray-500">Menu</button>
+        {/* Mobile Header */}
+        <header className="bg-white border-b border-gray-200 p-4 lg:hidden flex justify-between items-center shrink-0">
+             <div className="flex items-center gap-2">
+                 <button onClick={() => setShowMobileSidebar(true)} className="p-1 -ml-1 text-gray-600">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" />
+                    </svg>
+                 </button>
+                 <span className="font-bold text-indigo-700">Extractor CRM</span>
+             </div>
         </header>
 
         <main className="flex-1 overflow-y-auto p-4 md:p-6 lg:p-8">
-          <div className="max-w-7xl mx-auto h-full grid grid-cols-1 lg:grid-cols-12 gap-6">
+          <div className="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-12 gap-6 h-full lg:h-auto">
             
-            {/* Editor Column */}
-            <div className="lg:col-span-4 flex flex-col h-full min-h-[500px]">
+            {/* Editor Column - Takes natural height, does not overflow container on mobile */}
+            <div className="lg:col-span-4 flex flex-col h-fit">
               <ExtractionControls
                 projectName={projectName}
                 onProjectNameChange={setProjectName}
@@ -138,13 +178,15 @@ const App: React.FC = () => {
                 limit={limit}
                 onLimitChange={setLimit}
                 onExtract={handleExtract}
+                onAiExtract={handleAiExtract}
                 onSave={handleSave}
                 isSaving={isSaving}
+                isAiExtracting={isAiExtracting}
               />
             </div>
 
-            {/* Results Column */}
-            <div className="lg:col-span-8 flex flex-col h-full min-h-[400px]">
+            {/* Results Column - Fills rest of height on Desktop, specific height on mobile */}
+            <div className="lg:col-span-8 flex flex-col h-[600px] lg:h-full pb-4 lg:pb-0">
               <ResultsTable 
                 result={result} 
                 projectName={projectName}

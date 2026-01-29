@@ -1,14 +1,14 @@
 import React, { useState } from 'react';
 import { ExtractionResult } from '../types';
-import { exportToExcel, copyForGoogleSheets } from '../services/exportService';
+import { exportToExcel, copyForGoogleSheets, copyFormatted } from '../services/exportService';
 
 interface ResultsTableProps {
   result: ExtractionResult | null;
   projectName?: string;
 }
 
-// Enhanced Copy Button with text label
-const CopyButton = ({ text }: { text: string }) => {
+// Enhanced Copy Button with customizable label
+const CopyButton = ({ text, label = "Copy" }: { text: string, label?: string }) => {
   const [copied, setCopied] = useState(false);
 
   const handleCopy = () => {
@@ -22,7 +22,7 @@ const CopyButton = ({ text }: { text: string }) => {
     <button
       onClick={handleCopy}
       className={`
-        flex-shrink-0 flex items-center gap-1.5 px-2 py-1 rounded text-[10px] font-bold border shadow-sm transition-all uppercase tracking-wide
+        flex-shrink-0 flex items-center justify-center gap-1.5 px-2 py-1 rounded text-[10px] font-bold border shadow-sm transition-all uppercase tracking-wide flex-1
         ${copied 
           ? 'bg-green-50 text-green-700 border-green-200' 
           : 'bg-white text-gray-500 border-gray-200 hover:text-indigo-600 hover:border-indigo-300 hover:shadow'
@@ -35,16 +35,156 @@ const CopyButton = ({ text }: { text: string }) => {
         </svg>
       ) : (
         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-3 h-3">
-          <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 17.25v3.375c0 .621-.504 1.125-1.125 1.125h-9.75a1.125 1.125 0 01-1.125-1.125V7.875c0-.621.504-1.125 1.125-1.125H6.75a9.06 9.06 0 011.5.124m7.5 10.376h3.375c.621 0 1.125-.504 1.125-1.125V11.25c0-4.46-3.243-8.161-7.5-8.876a9.06 9.06 0 00-1.5-.124H9.375c-.621 0-1.125.504-1.125 1.125v3.5m7.5 10.375H9.375a1.125 1.125 0 01-1.125-1.125v-9.25m12 6.625v-1.875a3.375 3.375 0 00-3.375-3.375h-1.5a1.125 1.125 0 01-1.125-1.125v-1.5a3.375 3.375 0 00-3.375-3.375H9.75" />
+          <path strokeLinecap="round" strokeLinejoin="round" d="M13.19 8.688a4.5 4.5 0 011.242 7.244l-4.5 4.5a4.5 4.5 0 01-6.364-6.364l1.757-1.757m13.35-.622l1.757-1.757a4.5 4.5 0 00-6.364-6.364l-4.5 4.5a4.5 4.5 0 001.242 7.244" />
         </svg>
       )}
-      {copied ? 'Đã chép' : 'Copy'}
+      {copied ? 'Đã chép' : label}
+    </button>
+  );
+};
+
+// Helper: Fetch image blob with fallbacks
+const fetchImageBlob = async (src: string): Promise<Blob> => {
+  const fetchWithTimeout = async (url: string) => {
+      const controller = new AbortController();
+      const id = setTimeout(() => controller.abort(), 15000); // 15s timeout
+      try {
+          const res = await fetch(url, { signal: controller.signal });
+          clearTimeout(id);
+          if(!res.ok) throw new Error(`Status ${res.status}`);
+          return await res.blob();
+      } catch (e) {
+          clearTimeout(id);
+          throw e;
+      }
+  };
+
+  // List of proxies to try
+  const strategies = [
+    // Strategy 1: CorsProxy.io (Specific for images)
+    `https://corsproxy.io/?${encodeURIComponent(src)}`,
+    // Strategy 2: CodeTabs
+    `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(src)}`,
+     // Strategy 3: Direct (If CORS is allowed)
+    src
+  ];
+
+  for (const url of strategies) {
+    try {
+      const blob = await fetchWithTimeout(url);
+      if (blob.size > 0) return blob;
+    } catch (e) {
+      // Continue to next strategy
+    }
+  }
+
+  throw new Error("Failed to fetch image via all proxies");
+};
+
+// Helper: Convert any blob to PNG for clipboard compatibility
+const convertToPng = (blob: Blob): Promise<Blob> => {
+  return new Promise((resolve, reject) => {
+      const img = new Image();
+      const url = URL.createObjectURL(blob);
+      
+      img.onload = () => {
+          const canvas = document.createElement('canvas');
+          canvas.width = img.width;
+          canvas.height = img.height;
+          const ctx = canvas.getContext('2d');
+          if (!ctx) {
+              URL.revokeObjectURL(url);
+              reject(new Error("Canvas context failed"));
+              return;
+          }
+          ctx.drawImage(img, 0, 0);
+          canvas.toBlob((b) => {
+              URL.revokeObjectURL(url);
+              if (b) resolve(b);
+              else reject(new Error("Conversion to PNG failed"));
+          }, 'image/png');
+      };
+      
+      img.onerror = (e) => {
+        URL.revokeObjectURL(url);
+        reject(new Error("Image load failed"));
+      };
+      
+      img.src = url;
+  });
+};
+
+// Button to copy actual image blob to clipboard (for Figma)
+const CopyImageButton = ({ src }: { src: string }) => {
+  const [status, setStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
+
+  const handleCopyImage = async () => {
+    if (!src) return;
+    setStatus('loading');
+    try {
+      // 1. Fetch the raw image data (handling CORS)
+      const rawBlob = await fetchImageBlob(src);
+      
+      // 2. Convert to PNG to ensure Clipboard API compatibility
+      const pngBlob = await convertToPng(rawBlob);
+
+      // 3. Write blob to clipboard
+      await navigator.clipboard.write([
+        new ClipboardItem({ 'image/png': pngBlob })
+      ]);
+
+      setStatus('success');
+      setTimeout(() => setStatus('idle'), 2000);
+    } catch (error) {
+      console.error("Copy Image Failed", error);
+      setStatus('error');
+      setTimeout(() => setStatus('idle'), 2000);
+    }
+  };
+
+  return (
+    <button
+      onClick={handleCopyImage}
+      disabled={status === 'loading'}
+      className={`
+        flex-shrink-0 flex items-center justify-center gap-1.5 px-2 py-1 rounded text-[10px] font-bold border shadow-sm transition-all uppercase tracking-wide flex-1
+        ${status === 'success' ? 'bg-green-50 text-green-700 border-green-200' : ''}
+        ${status === 'error' ? 'bg-red-50 text-red-700 border-red-200' : ''}
+        ${status === 'idle' ? 'bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100' : ''}
+        ${status === 'loading' ? 'opacity-75 cursor-wait bg-indigo-50 border-indigo-200' : ''}
+      `}
+      title="Copy hình ảnh để dán vào Figma (Ctrl+V)"
+    >
+       {status === 'loading' && (
+         <span className="w-2.5 h-2.5 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin"></span>
+       )}
+       
+       {status === 'success' && (
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-3 h-3">
+          <path fillRule="evenodd" d="M16.704 4.153a.75.75 0 01.143 1.052l-8 10.5a.75.75 0 01-1.127.075l-4.5-4.5a.75.75 0 011.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 011.05-.143z" clipRule="evenodd" />
+        </svg>
+       )}
+
+       {status === 'error' && (
+         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-3 h-3">
+            <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-8-5a.75.75 0 01.75.75v4.5a.75.75 0 01-1.5 0v-4.5A.75.75 0 0110 5zm0 10a1 1 0 100-2 1 1 0 000 2z" clipRule="evenodd" />
+         </svg>
+       )}
+
+       {status === 'idle' && (
+         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-3 h-3">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 001.5-1.5V6a1.5 1.5 0 00-1.5-1.5H3.75A1.5 1.5 0 002.25 6v12a1.5 1.5 0 001.5 1.5zm10.5-11.25h.008v.008h-.008V8.25zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0z" />
+         </svg>
+       )}
+       
+       {status === 'success' ? 'Xong' : status === 'error' ? 'Lỗi' : status === 'loading' ? 'Đang tải' : 'Copy Ảnh'}
     </button>
   );
 };
 
 const ResultsTable: React.FC<ResultsTableProps> = ({ result, projectName = "Data" }) => {
-  const [copySheetLabel, setCopySheetLabel] = useState("Copy cho Sheets");
+  const [copySheetLabel, setCopySheetLabel] = useState("Copy thường");
+  const [copyFormattedLabel, setCopyFormattedLabel] = useState("Copy định dạng (#)");
   const [hoveredImage, setHoveredImage] = useState<string | null>(null);
 
   if (!result) {
@@ -72,7 +212,13 @@ const ResultsTable: React.FC<ResultsTableProps> = ({ result, projectName = "Data
   const handleCopySheets = () => {
     copyForGoogleSheets(result.items);
     setCopySheetLabel("Đã copy!");
-    setTimeout(() => setCopySheetLabel("Copy cho Sheets"), 2000);
+    setTimeout(() => setCopySheetLabel("Copy thường"), 2000);
+  };
+
+  const handleCopyFormatted = () => {
+    copyFormatted(result.items);
+    setCopyFormattedLabel("Đã copy #");
+    setTimeout(() => setCopyFormattedLabel("Copy định dạng (#)"), 2000);
   };
 
   return (
@@ -103,10 +249,17 @@ const ResultsTable: React.FC<ResultsTableProps> = ({ result, projectName = "Data
               onClick={handleCopySheets}
               className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-gray-200 rounded text-xs font-medium text-gray-700 hover:bg-gray-50 hover:border-gray-300 transition-colors"
             >
-              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-3.5 h-3.5">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 17.25v3.375c0 .621-.504 1.125-1.125 1.125h-9.75a1.125 1.125 0 01-1.125-1.125V7.875c0-.621.504-1.125 1.125-1.125H6.75a9.06 9.06 0 011.5.124m7.5 10.376h3.375c.621 0 1.125-.504 1.125-1.125V11.25c0-4.46-3.243-8.161-7.5-8.876a9.06 9.06 0 00-1.5-.124H9.375c-.621 0-1.125.504-1.125 1.125v3.5m7.5 10.375H9.375a1.125 1.125 0 01-1.125-1.125v-9.25m12 6.625v-1.875a3.375 3.375 0 00-3.375-3.375h-1.5a1.125 1.125 0 01-1.125-1.125v-1.5a3.375 3.375 0 00-3.375-3.375H9.75" />
-              </svg>
               {copySheetLabel}
+            </button>
+
+            <button 
+              onClick={handleCopyFormatted}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-50 border border-indigo-100 rounded text-xs font-bold text-indigo-700 hover:bg-indigo-100 transition-colors"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-3.5 h-3.5">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v12m-3-2.818l.879.659c1.171.879 3.07.879 4.242 0 1.172-.879 1.172-2.303 0-3.182C13.536 12.219 12.768 12 12 12c-.725 0-1.45-.22-2.003-.659-1.106-.879-1.106-2.303 0-3.182s2.9-.879 4.006 0l.415.33M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              {copyFormattedLabel}
             </button>
             
             <button 
@@ -143,7 +296,7 @@ const ResultsTable: React.FC<ResultsTableProps> = ({ result, projectName = "Data
                           {item.name || <span className="text-gray-300 italic">Trống</span>}
                         </div>
                         {item.name && (
-                          <div className="flex">
+                          <div className="flex w-fit">
                             <CopyButton text={item.name} />
                           </div>
                         )}
@@ -168,8 +321,8 @@ const ResultsTable: React.FC<ResultsTableProps> = ({ result, projectName = "Data
                           <span className="text-gray-300">-</span>
                         )}
                         {item.href && (
-                          <div className="flex">
-                            <CopyButton text={item.href} />
+                          <div className="flex w-fit">
+                            <CopyButton text={item.href} label="Copy Link" />
                           </div>
                         )}
                       </div>
@@ -199,13 +352,14 @@ const ResultsTable: React.FC<ResultsTableProps> = ({ result, projectName = "Data
                             </div>
                           </div>
                           
-                          {/* URL and Copy Button on the same row, to the right */}
+                          {/* URL and Copy Buttons on the same row, to the right */}
                           <div className="flex-1 min-w-0 flex flex-col justify-center gap-2">
                              <div className="text-[10px] text-gray-500 font-mono truncate select-all bg-gray-50 px-2 py-1 rounded border border-gray-100 w-full" title={item.src}>
                                {item.src}
                              </div>
-                             <div className="flex">
-                               <CopyButton text={item.src} />
+                             <div className="flex gap-2">
+                               <CopyButton text={item.src} label="Copy URL" />
+                               <CopyImageButton src={item.src} />
                              </div>
                           </div>
                         </div>

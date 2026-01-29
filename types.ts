@@ -34,3 +34,10 @@ export interface Project {
   config: ParseConfig;
   lastResult: ExtractionResult | null;
 }
+
+export interface DetectedClass {
+  className: string;
+  count: number;
+  type: 'img' | 'parent'; // Is this class on the img tag or the wrapper div?
+  example?: string;
+}

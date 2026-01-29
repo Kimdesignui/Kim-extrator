@@ -48,3 +48,28 @@ export const copyForGoogleSheets = (items: ExtractedItem[]) => {
     alert("Failed to copy to clipboard");
   });
 };
+
+// New function for Formatted Copy
+export const copyFormatted = (items: ExtractedItem[]) => {
+  // Headers in Vietnamese
+  const headers = ["#ID", "Nội dung", "Liên kết", "Hình ảnh"];
+  
+  const rows = items.map(item => {
+    // Sanitize name to remove tabs/newlines so it aligns perfectly in columns
+    const safeName = (item.name || '').replace(/[\t\n\r]+/g, ' ').trim();
+    
+    return [
+      `#${item.id}`, // Prefix # to ID
+      safeName,
+      item.href || '',
+      item.src || ''
+    ].join('\t');
+  });
+
+  const tsvData = [headers.join('\t'), ...rows].join('\n');
+
+  navigator.clipboard.writeText(tsvData).catch(err => {
+    console.error('Failed to copy: ', err);
+    alert("Lỗi khi copy vào clipboard");
+  });
+};

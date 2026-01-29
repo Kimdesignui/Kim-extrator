@@ -1,4 +1,122 @@
-import { ExtractionMode, ExtractedItem, ParseConfig, ExtractionResult } from '../types';
+import { ExtractionMode, ExtractedItem, ParseConfig, ExtractionResult, DetectedClass } from '../types';
+
+// Robust function to fetch HTML from URL via multiple Proxy services
+export const fetchHtmlFromUrl = async (url: string): Promise<string> => {
+  const cleanUrl = url.trim();
+  
+  // Basic validation
+  if (!cleanUrl.toLowerCase().startsWith('http')) {
+    throw new Error("URL phải bắt đầu bằng http:// hoặc https://");
+  }
+
+  // Helper to fetch with timeout
+  const fetchWithTimeout = async (resource: string) => {
+    const controller = new AbortController();
+    const id = setTimeout(() => controller.abort(new Error("Request timed out after 15s")), 15000); // Increased to 15s
+    try {
+      const response = await fetch(resource, { signal: controller.signal });
+      clearTimeout(id);
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      return response;
+    } catch (error) {
+      clearTimeout(id);
+      throw error;
+    }
+  };
+
+  const errors: string[] = [];
+
+  // Strategy 1: AllOrigins (Returns JSON { contents: string })
+  // Usually the most reliable for text content
+  try {
+    const response = await fetchWithTimeout(`https://api.allorigins.win/get?url=${encodeURIComponent(cleanUrl)}`);
+    const data = await response.json();
+    if (data.contents) return data.contents;
+  } catch (e: any) {
+    console.warn("Primary proxy (AllOrigins) failed", e.message);
+    errors.push(`AllOrigins: ${e.message}`);
+  }
+
+  // Strategy 2: CorsProxy.io (Returns Raw HTML)
+  // Good for direct HTML fetching
+  try {
+    const response = await fetchWithTimeout(`https://corsproxy.io/?${encodeURIComponent(cleanUrl)}`);
+    const text = await response.text();
+    if (text && text.length > 50) return text;
+  } catch (e: any) {
+    console.warn("Secondary proxy (CorsProxy) failed", e.message);
+    errors.push(`CorsProxy: ${e.message}`);
+  }
+
+  // Strategy 3: CodeTabs (Returns Raw HTML)
+  try {
+    const response = await fetchWithTimeout(`https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(cleanUrl)}`);
+    const text = await response.text();
+    if (text && text.length > 50) return text;
+  } catch (e: any) {
+    console.warn("Tertiary proxy (CodeTabs) failed", e.message);
+    errors.push(`CodeTabs: ${e.message}`);
+  }
+
+  // Strategy 4: ThingProxy (Backup)
+  try {
+    const response = await fetchWithTimeout(`https://thingproxy.freeboard.io/fetch/${cleanUrl}`);
+    const text = await response.text();
+    if (text && text.length > 50) return text;
+  } catch (e: any) {
+    console.warn("Quaternary proxy (ThingProxy) failed", e.message);
+    errors.push(`ThingProxy: ${e.message}`);
+  }
+
+  throw new Error(`Không thể tải trang web này. Có thể do chặn Proxy hoặc Timeout.\nChi tiết lỗi: ${errors.join(' | ')}.\nGiải pháp: Hãy mở trang web, nhấn Ctrl+U, copy toàn bộ mã nguồn và dán vào ô bên dưới.`);
+};
+
+// Function to scan HTML and find potential image classes
+export const scanImageClasses = (html: string): DetectedClass[] => {
+  if (!html.trim()) return [];
+
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(html, 'text/html');
+  const imgs = doc.querySelectorAll('img');
+  
+  const classMap = new Map<string, { count: number, type: 'img' | 'parent', example: string }>();
+
+  imgs.forEach(img => {
+    // 1. Check classes on the <img> tag itself
+    if (img.className && typeof img.className === 'string') {
+      const classes = img.className.split(/\s+/).filter(c => c.length > 2); // Filter short/garbage classes
+      classes.forEach(cls => {
+        const key = `img.${cls}`;
+        const current = classMap.get(key) || { count: 0, type: 'img', example: img.src };
+        classMap.set(key, { ...current, count: current.count + 1 });
+      });
+    }
+
+    // 2. Check classes on the immediate parent (often a wrapper like .product-image)
+    const parent = img.parentElement;
+    if (parent && parent.className && typeof parent.className === 'string') {
+      const classes = parent.className.split(/\s+/).filter(c => c.length > 2);
+      classes.forEach(cls => {
+        const key = `.${cls} img`; // Selector syntax for parent > img
+        const current = classMap.get(key) || { count: 0, type: 'parent', example: img.src };
+        classMap.set(key, { ...current, count: current.count + 1 });
+      });
+    }
+  });
+
+  // Convert map to array and sort by frequency
+  return Array.from(classMap.entries())
+    .map(([className, data]) => ({
+      className: className, // This is already in selector format (e.g. "img.my-class" or ".wrapper img")
+      count: data.count,
+      type: data.type,
+      example: data.example
+    }))
+    .sort((a, b) => b.count - a.count) // Descending order
+    .slice(0, 15); // Take top 15 most frequent
+};
 
 export const parseHtml = (config: ParseConfig): ExtractionResult => {
   const { html, selector, mode, limit } = config;
