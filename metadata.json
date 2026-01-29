@@ -1,0 +1,5 @@
+{
+  "name": "HTML Data Extractor",
+  "description": "A powerful tool to parse, extract, and tabularize links, text, and images from HTML snippets using DOM parsing and Gemini AI assistance.",
+  "requestFramePermissions": []
+}
