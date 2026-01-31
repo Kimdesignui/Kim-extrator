@@ -16,8 +16,8 @@ const HelpModal: React.FC<HelpModalProps> = ({ isOpen, onClose }) => {
         onClick={onClose}
       ></div>
 
-      {/* Modal Content */}
-      <div className="bg-white rounded-xl shadow-2xl w-full max-w-3xl max-h-[90vh] flex flex-col relative z-10 overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+      {/* Modal Content - Changed max-w-3xl to max-w-5xl for wider display */}
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-5xl max-h-[90vh] flex flex-col relative z-10 overflow-hidden animate-in fade-in zoom-in-95 duration-200">
         
         {/* Header */}
         <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50/50">

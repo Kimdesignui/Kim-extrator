@@ -46,9 +46,13 @@ const ExtractionControls: React.FC<ExtractionControlsProps> = ({
   const [aiPrompt, setAiPrompt] = useState('');
   const [showAiInput, setShowAiInput] = useState(false);
   
+  // Toggle for Advanced/Manual Mode
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  
   // URL Fetching State
   const [urlInput, setUrlInput] = useState('');
   const [isFetchingUrl, setIsFetchingUrl] = useState(false);
+  const [fetchStatus, setFetchStatus] = useState('');
 
   // Class Detection State
   const [detectedClasses, setDetectedClasses] = useState<DetectedClass[]>([]);
@@ -115,15 +119,64 @@ const ExtractionControls: React.FC<ExtractionControlsProps> = ({
   };
 
   const handleFetchUrl = async () => {
-    if (!urlInput) return;
+    if (!urlInput.trim()) return;
+    
+    // Split URLs by newline and filter empty ones
+    const urls = urlInput.split(/\r?\n/).map(u => u.trim()).filter(u => u.length > 0);
+    
+    if (urls.length === 0) return;
+
     setIsFetchingUrl(true);
+    setFetchStatus(`Đang tải ${urls.length} trang...`);
+    
     try {
-      const fetchedHtml = await fetchHtmlFromUrl(urlInput);
-      onHtmlChange(fetchedHtml);
+      // Fetch all URLs in parallel
+      const results = await Promise.allSettled(urls.map(url => fetchHtmlFromUrl(url)));
+
+      const successHtmls: string[] = [];
+      let failCount = 0;
+
+      results.forEach((result, index) => {
+        if (result.status === 'fulfilled') {
+          // Wrap content in a div to ensure DOMParser treats them as siblings and doesn't close the body early
+          successHtmls.push(
+             `<!-- =============== START OF PAGE ${index + 1} =============== -->\n` +
+             `<div data-page-source="${urls[index]}" class="extractor-page-wrapper">\n` +
+             result.value + 
+             `\n</div>` +
+             `\n<!-- =============== END OF PAGE ${index + 1} =============== -->`
+          );
+        } else {
+          failCount++;
+          console.warn(`Failed to fetch ${urls[index]}:`, result.reason);
+        }
+      });
+
+      if (successHtmls.length > 0) {
+        // Combine all HTMLs into one big string
+        onHtmlChange(successHtmls.join('\n\n'));
+        
+        // Auto-increase limit based on number of pages fetched if current limit is low
+        const suggestedLimit = Math.max(limit, urls.length * 20);
+        if (suggestedLimit > limit) {
+           onLimitChange(suggestedLimit);
+        }
+
+        let msg = `Đã tải xong ${successHtmls.length}/${urls.length} trang.`;
+        if (failCount > 0) msg += ` (Lỗi ${failCount} trang)`;
+        setFetchStatus(msg);
+      } else {
+        setFetchStatus("Thất bại toàn bộ. Vui lòng kiểm tra lại link.");
+        alert("Không tải được trang nào. Có thể do chặn Proxy.");
+      }
+
     } catch (error: any) {
-      alert(error.message || "Không thể tải trang web này.");
+      setFetchStatus("Lỗi hệ thống.");
+      alert(error.message || "Lỗi không xác định.");
     } finally {
       setIsFetchingUrl(false);
+      // Clear status after 3 seconds
+      setTimeout(() => setFetchStatus(''), 3000);
     }
   };
 
@@ -159,168 +212,57 @@ const ExtractionControls: React.FC<ExtractionControlsProps> = ({
 
       <hr className="border-gray-100" />
 
-      {/* URL Input Step */}
+      {/* URL Input Step (Primary Focus) */}
       <div>
-        <label className={labelClass}>
-          1. Nhập Link Website (Tự động tải HTML)
-        </label>
-        <div className="flex gap-2">
-          <input
-            type="text"
-            className={inputClass}
-            placeholder="https://example.com/danh-muc-san-pham"
+        <div className="flex justify-between items-center mb-1">
+          <label className={labelClass}>
+            Danh sách Link Website
+          </label>
+          {fetchStatus && (
+            <span className={`text-[10px] font-bold ${fetchStatus.includes('Lỗi') || fetchStatus.includes('Thất bại') ? 'text-red-600' : 'text-green-600'}`}>
+              {fetchStatus}
+            </span>
+          )}
+        </div>
+        
+        <div className="flex flex-col gap-2">
+          <textarea
+            className={`${inputClass} min-h-[100px] resize-y font-mono text-xs`}
+            placeholder={`Dán danh sách link vào đây (mỗi link 1 dòng)...\nVí dụ:\nhttps://site.com/page/1\nhttps://site.com/page/2`}
             value={urlInput}
             onChange={(e) => setUrlInput(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && handleFetchUrl()}
           />
           <button
             onClick={handleFetchUrl}
-            disabled={isFetchingUrl || !urlInput}
-            className="bg-blue-600 text-white px-3 py-2 rounded-md text-sm font-medium hover:bg-blue-700 disabled:bg-blue-300 disabled:cursor-not-allowed transition-colors whitespace-nowrap min-w-[80px] flex justify-center items-center"
+            disabled={isFetchingUrl || !urlInput.trim()}
+            className="bg-blue-600 text-white px-3 py-2.5 rounded-md text-sm font-medium hover:bg-blue-700 disabled:bg-blue-300 disabled:cursor-not-allowed transition-colors w-full flex justify-center items-center gap-2 shadow-sm"
           >
             {isFetchingUrl ? (
-               <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
-            ) : 'Tải HTML'}
+               <>
+                 <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
+                 <span>Đang tải dữ liệu...</span>
+               </>
+            ) : (
+               <>
+                 <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
+                   <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5" />
+                 </svg>
+                 Tải Mã Nguồn HTML
+               </>
+            )}
           </button>
         </div>
         <p className="text-[10px] text-gray-400 mt-1 italic">
-          *Lưu ý: Một số trang web bảo mật cao (Shopee, FB) có thể chặn tính năng này.
+            Hệ thống sẽ tự động gộp dữ liệu từ tất cả các link trên.
         </p>
       </div>
 
-      {/* HTML Input Step */}
-      <div className="flex-1 flex flex-col min-h-[100px]">
-        <div className="flex justify-between items-center mb-1">
-          <label className={labelClass}>
-            Mã nguồn HTML
-          </label>
-          {html && (
-            <button 
-              onClick={() => onHtmlChange('')}
-              className="text-[10px] text-red-500 hover:text-red-700 underline"
-            >
-              Xóa HTML
-            </button>
-          )}
-        </div>
-        <textarea
-          className={`${inputClass} flex-1 font-mono text-xs resize-none`}
-          placeholder={html ? "" : "Nội dung HTML sẽ hiển thị ở đây sau khi tải URL..."}
-          value={html}
-          onChange={(e) => onHtmlChange(e.target.value)}
-        />
-      </div>
-
-      {/* Detected Classes Section */}
-      {detectedClasses.length > 0 && (
-         <div className="bg-gray-50 p-3 rounded-lg border border-gray-200">
-             <div className="flex justify-between items-center mb-2">
-                <span className="text-xs font-bold text-gray-700 uppercase">Class Ảnh Tìm Thấy</span>
-                <button 
-                    onClick={handleAiPickFromList}
-                    disabled={isAiLoading}
-                    className="text-[10px] bg-purple-100 text-purple-700 px-2 py-1 rounded font-bold hover:bg-purple-200 flex items-center gap-1"
-                >
-                    {isAiLoading ? '...' : '✨ AI Lọc Giúp'}
-                </button>
-             </div>
-             <div className="flex flex-wrap gap-2 max-h-[100px] overflow-y-auto">
-                {detectedClasses.map((cls, idx) => (
-                    <button
-                        key={idx}
-                        onClick={() => {
-                            onSelectorChange(cls.className);
-                            onModeChange(ExtractionMode.IMAGES);
-                        }}
-                        className="text-[10px] text-gray-700 px-2 py-1 bg-white border border-gray-300 rounded hover:bg-indigo-50 hover:border-indigo-400 hover:text-indigo-700 hover:shadow-sm transition-all text-left flex items-center gap-2 group"
-                        title={`Found ${cls.count} times. Type: ${cls.type}`}
-                    >
-                       <span className="font-mono font-semibold">{cls.className}</span>
-                       <span className="bg-gray-100 text-gray-600 border border-gray-200 px-1.5 py-0.5 rounded text-[9px] group-hover:bg-white group-hover:border-indigo-200 transition-colors">{cls.count}</span>
-                    </button>
-                ))}
-             </div>
-         </div>
-      )}
-
-      {/* Smart Selector Helper (Legacy) */}
-      {!detectedClasses.length && html && (
-        <div className="bg-indigo-50/60 p-3 rounded-lg border border-indigo-100">
-           <div className="text-xs font-semibold text-indigo-800 mb-2 flex items-center gap-1">
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-3.5 h-3.5">
-                <path d="M12 2.25a.75.75 0 01.75.75v2.25a.75.75 0 01-1.5 0V3a.75.75 0 01.75-.75zM7.5 12a4.5 4.5 0 119 0 4.5 4.5 0 01-9 0zM18.894 6.166a.75.75 0 00-1.06-1.06l-1.591 1.59a.75.75 0 101.06 1.061l1.591-1.59zM21.75 12a.75.75 0 01-.75.75h-2.25a.75.75 0 010-1.5H21a.75.75 0 01.75.75zM17.834 18.894a.75.75 0 001.06-1.06l-1.59-1.591a.75.75 0 10-1.061 1.06l1.59 1.591zM12 18a4.5 4.5 0 110-9 4.5 4.5 0 010 9zM12 21.75a.75.75 0 01-.75-.75v-2.25a.75.75 0 011.5 0v2.25a.75.75 0 01-.75.75zM4.166 18.894a.75.75 0 001.06 1.06l1.591-1.591a.75.75 0 10-1.06-1.06l-1.59zM2.25 12a.75.75 0 01.75-.75h2.25a.75.75 0 010 1.5H3a.75.75 0 01-.75-.75zM4.166 5.106a.75.75 0 00-1.06 1.06l1.591 1.59a.75.75 0 101.06-1.06l-1.591-1.59z" />
-              </svg>
-              Gợi ý Selector (AI)
-           </div>
-           <div className="flex gap-2 flex-wrap">
-              <button
-                onClick={() => handleAiSuggest("Hãy tìm class CSS của tiêu đề bài viết hoặc tên sản phẩm")}
-                disabled={isAiLoading}
-                className="bg-white text-indigo-600 border border-indigo-200 px-3 py-1.5 rounded text-xs font-medium hover:bg-indigo-50 hover:border-indigo-300 transition-colors shadow-sm disabled:opacity-50"
-              >
-                📝 Tìm Tên/Tiêu Đề
-              </button>
-              <button
-                onClick={() => handleAiSuggest("Hãy tìm class CSS của đường link chi tiết sản phẩm")}
-                disabled={isAiLoading}
-                className="bg-white text-indigo-600 border border-indigo-200 px-3 py-1.5 rounded text-xs font-medium hover:bg-indigo-50 hover:border-indigo-300 transition-colors shadow-sm disabled:opacity-50"
-              >
-                🔗 Tìm Link Chi Tiết
-              </button>
-           </div>
-        </div>
-      )}
-
-      {/* Selector Step */}
-      <div>
-        <div className="flex justify-between items-center mb-1">
-          <label className={labelClass}>
-            2. Bộ chọn CSS (Selector)
-          </label>
-          <button
-            onClick={() => setShowAiInput(!showAiInput)}
-            className="text-xs text-indigo-600 font-medium hover:text-indigo-800 underline"
-          >
-            Tùy chỉnh nâng cao
-          </button>
-        </div>
-
-        {showAiInput && (
-          <div className="mb-2 p-3 bg-indigo-50/50 rounded-md border border-indigo-100 shadow-sm animate-in fade-in slide-in-from-top-2 duration-200">
-            <div className="flex gap-2">
-              <input
-                type="text"
-                value={aiPrompt}
-                onChange={(e) => setAiPrompt(e.target.value)}
-                className={`${inputClass}`}
-                placeholder="VD: 'Giá tiền màu đỏ', 'Avatar người dùng'..."
-                onKeyDown={(e) => e.key === 'Enter' && handleAiSuggest()}
-              />
-              <button 
-                onClick={() => handleAiSuggest()}
-                disabled={isAiLoading}
-                className="bg-indigo-600 text-white px-3 py-1 rounded-md text-xs font-semibold hover:bg-indigo-700 disabled:opacity-50"
-              >
-                {isAiLoading ? '...' : 'Hỏi AI'}
-              </button>
-            </div>
-          </div>
-        )}
-
-        <input
-          type="text"
-          className={`${inputClass} ${isAiLoading ? 'animate-pulse bg-indigo-50' : ''}`}
-          placeholder={isAiLoading ? "AI đang phân tích..." : ".product-item img (Hoặc bấm nút gợi ý ở trên)"}
-          value={selector}
-          onChange={(e) => onSelectorChange(e.target.value)}
-        />
-      </div>
-
+      {/* Basic Settings (Always Visible) */}
       <div className="grid grid-cols-2 gap-4">
         {/* Type Selection */}
         <div>
           <label className={labelClass}>
-            3. Loại dữ liệu
+            Loại dữ liệu
           </label>
           <select
             value={mode}
@@ -337,7 +279,7 @@ const ExtractionControls: React.FC<ExtractionControlsProps> = ({
         {/* Limit */}
         <div>
           <label className={labelClass}>
-            Số lượng tối đa
+            Số lượng
           </label>
           <input
             type="number"
@@ -349,33 +291,193 @@ const ExtractionControls: React.FC<ExtractionControlsProps> = ({
         </div>
       </div>
 
-      {/* Action */}
-      <div className="pt-2 flex flex-col gap-2">
-        <button
-          onClick={onExtract}
-          className="w-full bg-indigo-600 text-white py-2.5 px-4 rounded-md font-semibold shadow-sm hover:bg-indigo-700 hover:shadow transition-all active:scale-[0.98] flex items-center justify-center gap-2"
-        >
-          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-5 h-5">
-            <path strokeLinecap="round" strokeLinejoin="round" d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.348a1.125 1.125 0 010 1.971l-11.54 6.347a1.125 1.125 0 01-1.667-.985V5.653z" />
-          </svg>
-          Chạy Bóc Tách (Theo Selector)
-        </button>
-
+      {/* Main Actions */}
+      <div className="pt-1 flex flex-col gap-3">
+        {/* Primary AI Action */}
         <button
           onClick={onAiExtract}
           disabled={isAiExtracting}
-          className="w-full bg-orange-50 text-orange-700 border border-orange-200 py-2.5 px-4 rounded-md font-semibold shadow-sm hover:bg-orange-100 hover:shadow transition-all active:scale-[0.98] flex items-center justify-center gap-2"
+          className="w-full bg-indigo-600 text-white py-3 px-4 rounded-md font-bold shadow hover:bg-indigo-700 hover:shadow-md transition-all active:scale-[0.98] flex items-center justify-center gap-2"
         >
           {isAiExtracting ? (
-             <span className="w-4 h-4 border-2 border-orange-600 border-t-transparent rounded-full animate-spin"></span>
+             <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
           ) : (
             <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-5 h-5">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 00-2.456 2.456zM16.894 20.567L16.5 21.75l-.394-1.183a2.25 2.25 0 00-1.423-1.423L13.5 18.75l1.183-.394a2.25 2.25 0 001.423-1.423l.394-1.183.394 1.183a2.25 2.25 0 001.423 1.423l1.183.394-1.183.394a2.25 2.25 0 00-1.423 1.423z" />
+               <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 00-2.456 2.456zM16.894 20.567L16.5 21.75l-.394-1.183a2.25 2.25 0 00-1.423-1.423L13.5 18.75l1.183-.394a2.25 2.25 0 001.423-1.423l.394-1.183.394 1.183a2.25 2.25 0 001.423 1.423l1.183.394-1.183.394a2.25 2.25 0 00-1.423 1.423z" />
             </svg>
           )}
           Bóc tách AI (Figma Sync)
         </button>
+
+         {/* Standard Manual Extract (Secondary) */}
+        <button
+          onClick={onExtract}
+          className="w-full bg-white text-gray-700 border border-gray-200 py-2 px-4 rounded-md font-semibold text-sm hover:bg-gray-50 hover:border-gray-300 transition-all flex items-center justify-center gap-2"
+        >
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M14.25 9.75L16.5 12l-2.25 2.25m-4.5 0L7.5 12l2.25-2.25M6 20.25h12A2.25 2.25 0 0020.25 18V6A2.25 2.25 0 0018 3.75H6A2.25 2.25 0 003.75 6v12A2.25 2.25 0 006 20.25z" />
+            </svg>
+            Bóc tách Thủ công (Selector)
+        </button>
       </div>
+
+      {/* Advanced Toggle */}
+      <div className="flex justify-center mt-2">
+         <button 
+           onClick={() => setShowAdvanced(!showAdvanced)}
+           className="text-xs text-gray-400 hover:text-indigo-600 flex items-center gap-1 transition-colors"
+         >
+            {showAdvanced ? (
+                <>
+                   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-3 h-3">
+                      <path fillRule="evenodd" d="M14.77 12.79a.75.75 0 01-1.06-.02L10 8.832 6.29 12.77a.75.75 0 11-1.08-1.04l4.25-4.5a.75.75 0 011.08 0l4.25 4.5a.75.75 0 01-.02 1.06z" clipRule="evenodd" />
+                   </svg>
+                   Ẩn Mã nguồn & Selector
+                </>
+            ) : (
+                <>
+                   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-3 h-3">
+                     <path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clipRule="evenodd" />
+                   </svg>
+                   Hiển thị Mã nguồn & Selector (Nâng cao)
+                </>
+            )}
+         </button>
+      </div>
+
+      {/* Advanced Section: HTML & Selector (Hidden by default) */}
+      {showAdvanced && (
+          <div className="flex flex-col gap-4 animate-in fade-in slide-in-from-top-2 duration-200 border-t border-gray-100 pt-4">
+              
+              {/* HTML Input Step */}
+              <div className="flex-1 flex flex-col min-h-[100px]">
+                <div className="flex justify-between items-center mb-1">
+                  <label className={labelClass}>
+                    Mã nguồn HTML (Gốc)
+                  </label>
+                  {html && (
+                    <button 
+                      onClick={() => onHtmlChange('')}
+                      className="text-[10px] text-red-500 hover:text-red-700 underline"
+                    >
+                      Xóa HTML
+                    </button>
+                  )}
+                </div>
+                <textarea
+                  className={`${inputClass} flex-1 font-mono text-xs resize-none h-[150px]`}
+                  placeholder={html ? "" : "Nội dung HTML sẽ hiển thị ở đây sau khi tải URL..."}
+                  value={html}
+                  onChange={(e) => onHtmlChange(e.target.value)}
+                />
+              </div>
+
+              {/* Detected Classes Section */}
+              {detectedClasses.length > 0 && (
+                 <div className="bg-gray-50 p-3 rounded-lg border border-gray-200">
+                     <div className="flex justify-between items-center mb-2">
+                        <span className="text-xs font-bold text-gray-700 uppercase">Class Ảnh Tìm Thấy</span>
+                        <button 
+                            onClick={handleAiPickFromList}
+                            disabled={isAiLoading}
+                            className="text-[10px] bg-purple-100 text-purple-700 px-2 py-1 rounded font-bold hover:bg-purple-200 flex items-center gap-1"
+                        >
+                            {isAiLoading ? '...' : '✨ AI Lọc Giúp'}
+                        </button>
+                     </div>
+                     <div className="flex flex-wrap gap-2 max-h-[100px] overflow-y-auto">
+                        {detectedClasses.map((cls, idx) => (
+                            <button
+                                key={idx}
+                                onClick={() => {
+                                    onSelectorChange(cls.className);
+                                    onModeChange(ExtractionMode.IMAGES);
+                                }}
+                                className="text-[10px] text-gray-700 px-2 py-1 bg-white border border-gray-300 rounded hover:bg-indigo-50 hover:border-indigo-400 hover:text-indigo-700 hover:shadow-sm transition-all text-left flex items-center gap-2 group"
+                                title={`Found ${cls.count} times. Type: ${cls.type}`}
+                            >
+                               <span className="font-mono font-semibold">{cls.className}</span>
+                               <span className="bg-gray-100 text-gray-600 border border-gray-200 px-1.5 py-0.5 rounded text-[9px] group-hover:bg-white group-hover:border-indigo-200 transition-colors">{cls.count}</span>
+                            </button>
+                        ))}
+                     </div>
+                 </div>
+              )}
+
+              {/* Smart Selector Helper (Available whenever HTML is present) */}
+              {html && (
+                <div className="bg-indigo-50/60 p-3 rounded-lg border border-indigo-100">
+                   <div className="text-xs font-semibold text-indigo-800 mb-2 flex items-center gap-1">
+                      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-3.5 h-3.5">
+                        <path d="M12 2.25a.75.75 0 01.75.75v2.25a.75.75 0 01-1.5 0V3a.75.75 0 01.75-.75zM7.5 12a4.5 4.5 0 119 0 4.5 4.5 0 01-9 0zM18.894 6.166a.75.75 0 00-1.06-1.06l-1.591 1.59a.75.75 0 101.06 1.061l1.591-1.59zM21.75 12a.75.75 0 01-.75.75h-2.25a.75.75 0 010-1.5H21a.75.75 0 01.75.75zM17.834 18.894a.75.75 0 001.06-1.06l-1.59-1.591a.75.75 0 10-1.061 1.06l1.59 1.591zM12 18a4.5 4.5 0 110-9 4.5 4.5 0 010 9zM12 21.75a.75.75 0 01-.75-.75v-2.25a.75.75 0 011.5 0v2.25a.75.75 0 01-.75.75zM4.166 18.894a.75.75 0 001.06 1.06l1.591-1.591a.75.75 0 10-1.06-1.06l-1.59zM2.25 12a.75.75 0 01.75-.75h2.25a.75.75 0 010 1.5H3a.75.75 0 01-.75-.75zM4.166 5.106a.75.75 0 00-1.06 1.06l1.591 1.59a.75.75 0 101.06-1.06l-1.591-1.59z" />
+                      </svg>
+                      Gợi ý Selector (AI)
+                   </div>
+                   <div className="flex gap-2 flex-wrap">
+                      <button
+                        onClick={() => handleAiSuggest("Hãy tìm class CSS của tiêu đề bài viết hoặc tên sản phẩm")}
+                        disabled={isAiLoading}
+                        className="bg-white text-indigo-600 border border-indigo-200 px-3 py-1.5 rounded text-xs font-medium hover:bg-indigo-50 hover:border-indigo-300 transition-colors shadow-sm disabled:opacity-50"
+                      >
+                        📝 Tìm Tên/Tiêu Đề
+                      </button>
+                      <button
+                        onClick={() => handleAiSuggest("Hãy tìm class CSS của đường link chi tiết sản phẩm")}
+                        disabled={isAiLoading}
+                        className="bg-white text-indigo-600 border border-indigo-200 px-3 py-1.5 rounded text-xs font-medium hover:bg-indigo-50 hover:border-indigo-300 transition-colors shadow-sm disabled:opacity-50"
+                      >
+                        🔗 Tìm Link Chi Tiết
+                      </button>
+                   </div>
+                </div>
+              )}
+
+              {/* Selector Step */}
+              <div>
+                <div className="flex justify-between items-center mb-1">
+                  <label className={labelClass}>
+                    Bộ chọn CSS (Selector)
+                  </label>
+                  <button
+                    onClick={() => setShowAiInput(!showAiInput)}
+                    className="text-xs text-indigo-600 font-medium hover:text-indigo-800 underline"
+                  >
+                    Tùy chỉnh nâng cao
+                  </button>
+                </div>
+
+                {showAiInput && (
+                  <div className="mb-2 p-3 bg-indigo-50/50 rounded-md border border-indigo-100 shadow-sm animate-in fade-in slide-in-from-top-2 duration-200">
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={aiPrompt}
+                        onChange={(e) => setAiPrompt(e.target.value)}
+                        className={`${inputClass}`}
+                        placeholder="VD: 'Giá tiền màu đỏ', 'Avatar người dùng'..."
+                        onKeyDown={(e) => e.key === 'Enter' && handleAiSuggest()}
+                      />
+                      <button 
+                        onClick={() => handleAiSuggest()}
+                        disabled={isAiLoading}
+                        className="bg-indigo-600 text-white px-3 py-1 rounded-md text-xs font-semibold hover:bg-indigo-700 disabled:opacity-50"
+                      >
+                        {isAiLoading ? '...' : 'Hỏi AI'}
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                <input
+                  type="text"
+                  className={`${inputClass} ${isAiLoading ? 'animate-pulse bg-indigo-50' : ''}`}
+                  placeholder={isAiLoading ? "AI đang phân tích..." : ".product-item img (Hoặc bấm nút gợi ý ở trên)"}
+                  value={selector}
+                  onChange={(e) => onSelectorChange(e.target.value)}
+                />
+              </div>
+          </div>
+      )}
 
     </div>
   );

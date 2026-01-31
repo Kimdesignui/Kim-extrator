@@ -5,7 +5,8 @@ const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
 export const getSmartSelector = async (htmlSnippet: string, userDescription: string): Promise<string> => {
   try {
-    const truncatedHtml = htmlSnippet.length > 15000 ? htmlSnippet.substring(0, 15000) + "...(truncated)" : htmlSnippet;
+    // Increased from 15,000 to 100,000 for better context understanding
+    const truncatedHtml = htmlSnippet.length > 100000 ? htmlSnippet.substring(0, 100000) + "...(truncated)" : htmlSnippet;
 
     const prompt = `
       I have an HTML snippet and I need a CSS Selector to extract specific elements.
@@ -69,21 +70,33 @@ export const extractFigmaData = async (htmlSnippet: string): Promise<ExtractedIt
   if (!htmlSnippet.trim()) return [];
 
   try {
-    const truncatedHtml = htmlSnippet.length > 30000 ? htmlSnippet.substring(0, 30000) + "...(truncated)" : htmlSnippet;
+    // CRITICAL FIX: Increased limit from 30,000 to 800,000 characters.
+    // Multi-page extraction requires significantly more context. 
+    // Gemini 1.5 Flash has a ~1M token window, so 800k chars is safe.
+    const truncatedHtml = htmlSnippet.length > 800000 ? htmlSnippet.substring(0, 800000) + "...(truncated)" : htmlSnippet;
 
     const prompt = `
-Role: Bạn là một chuyên gia bóc tách dữ liệu (Data Scraper) cao cấp, chuyên xử lý cấu hình cho Figma Sync.
+Role: Bạn là một Web Scraper AI có khả năng tự động nhận diện cấu trúc danh sách (Pattern Recognition).
 
-Task: Trích xuất danh sách sản phẩm từ đoạn mã HTML được cung cấp bên dưới.
+Nhiệm vụ: Trích xuất toàn bộ sản phẩm từ dữ liệu HTML được cung cấp.
 
-Extraction Rules:
-1. Product Name: Tìm tên sản phẩm trong các thẻ h1, h2, h3 hoặc các thẻ có class chứa "title", "name".
-2. Image URL: Đây là ưu tiên hàng đầu. Kiểm tra tất cả các thuộc tính sau của thẻ <img>: src, data-src, data-original, data-lazy-src, srcset.
-   - Nếu thấy srcset, hãy phân tích và chọn link có độ phân giải cao nhất (thường là link cuối cùng hoặc có hậu tố lớn nhất như 2x, 3x).
-   - Loại bỏ các icon nhỏ, avatar hoặc ảnh trang trí.
-3. Cleanup: Loại bỏ các ký tự thừa, khoảng trắng dư và đảm bảo link ảnh là link trực tiếp.
+Quy trình thực hiện (Bí kíp số 3 Automation):
+1. Định vị Vùng chứa (Container Discovery):
+   - Trước khi bóc tách, hãy quét toàn bộ HTML để tìm thẻ cha (thường là <ul>, <ol>, hoặc <div>) có chứa số lượng thẻ con lặp lại nhiều nhất (các thẻ có class giống nhau như "product", "item", "post").
+   - Cô lập dữ liệu: Chỉ tập trung vào nội dung bên trong vùng chứa này. Bỏ qua hoàn toàn Header, Footer, Sidebar và các Menu điều hướng.
 
-Output Format: Trả về KẾT QUẢ DUY NHẤT là một bảng Markdown với đúng 2 cột tiêu đề: BookName và #image. Không giải thích gì thêm.
+2. Truy quét Lazy Load (Dành cho WordPress):
+   - Đối với ảnh, không chỉ nhìn thẻ src. Phải kiểm tra: data-lazy-src, data-src, srcset, data-original.
+   - Nếu thấy srcset, hãy chọn link cuối cùng (thường là ảnh to nhất).
+
+3. Xử lý URL (Image Cleaning):
+   - Xóa bỏ các hậu tố kích thước của WordPress (ví dụ: -300x400.jpg, -scaled.jpg, ?w=...) để lấy link ảnh gốc.
+   - Nếu link là tương đối, hãy giữ nguyên, tôi sẽ xử lý sau.
+
+Đầu ra (Bắt buộc):
+   - Trả về duy nhất một bảng Markdown.
+   - Cột 1: BookName (Tên sản phẩm sạch, không kèm ký tự rác).
+   - Cột 2: #image (Link ảnh đã làm sạch, chất lượng cao nhất).
 
 HTML Content:
 \`\`\`html

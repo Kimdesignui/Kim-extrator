@@ -1,5 +1,25 @@
 import { ExtractionMode, ExtractedItem, ParseConfig, ExtractionResult, DetectedClass } from '../types';
 
+// Helper: Clean HTML to remove garbage (scripts, styles) and get pure content
+// This is crucial for WordPress sites to reduce token usage and noise for AI
+const cleanHtmlContent = (rawHtml: string): string => {
+  try {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(rawHtml, 'text/html');
+
+    // Remove garbage tags that AI doesn't need
+    // Removing 'noscript' is important because sometimes it contains fallback images that confuse the extractor
+    doc.querySelectorAll('script, style, noscript, iframe, svg, link[rel="stylesheet"]').forEach(el => el.remove());
+
+    // Return the clean body HTML
+    // We trim it to ensure no leading/trailing whitespace issues
+    return doc.body.innerHTML.trim();
+  } catch (e) {
+    console.warn("HTML cleaning failed, returning raw content", e);
+    return rawHtml;
+  }
+};
+
 // Robust function to fetch HTML from URL via multiple Proxy services
 export const fetchHtmlFromUrl = async (url: string): Promise<string> => {
   const cleanUrl = url.trim();
@@ -27,47 +47,61 @@ export const fetchHtmlFromUrl = async (url: string): Promise<string> => {
   };
 
   const errors: string[] = [];
+  let fetchedHtml = '';
 
   // Strategy 1: AllOrigins (Returns JSON { contents: string })
-  // Usually the most reliable for text content
-  try {
-    const response = await fetchWithTimeout(`https://api.allorigins.win/get?url=${encodeURIComponent(cleanUrl)}`);
-    const data = await response.json();
-    if (data.contents) return data.contents;
-  } catch (e: any) {
-    console.warn("Primary proxy (AllOrigins) failed", e.message);
-    errors.push(`AllOrigins: ${e.message}`);
+  // Usually the most reliable for text content and handles CORS well
+  if (!fetchedHtml) {
+    try {
+      const response = await fetchWithTimeout(`https://api.allorigins.win/get?url=${encodeURIComponent(cleanUrl)}`);
+      const data = await response.json();
+      if (data.contents) fetchedHtml = data.contents;
+    } catch (e: any) {
+      console.warn("Primary proxy (AllOrigins) failed", e.message);
+      errors.push(`AllOrigins: ${e.message}`);
+    }
   }
 
   // Strategy 2: CorsProxy.io (Returns Raw HTML)
   // Good for direct HTML fetching
-  try {
-    const response = await fetchWithTimeout(`https://corsproxy.io/?${encodeURIComponent(cleanUrl)}`);
-    const text = await response.text();
-    if (text && text.length > 50) return text;
-  } catch (e: any) {
-    console.warn("Secondary proxy (CorsProxy) failed", e.message);
-    errors.push(`CorsProxy: ${e.message}`);
+  if (!fetchedHtml) {
+    try {
+      const response = await fetchWithTimeout(`https://corsproxy.io/?${encodeURIComponent(cleanUrl)}`);
+      const text = await response.text();
+      if (text && text.length > 50) fetchedHtml = text;
+    } catch (e: any) {
+      console.warn("Secondary proxy (CorsProxy) failed", e.message);
+      errors.push(`CorsProxy: ${e.message}`);
+    }
   }
 
   // Strategy 3: CodeTabs (Returns Raw HTML)
-  try {
-    const response = await fetchWithTimeout(`https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(cleanUrl)}`);
-    const text = await response.text();
-    if (text && text.length > 50) return text;
-  } catch (e: any) {
-    console.warn("Tertiary proxy (CodeTabs) failed", e.message);
-    errors.push(`CodeTabs: ${e.message}`);
+  if (!fetchedHtml) {
+    try {
+      const response = await fetchWithTimeout(`https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(cleanUrl)}`);
+      const text = await response.text();
+      if (text && text.length > 50) fetchedHtml = text;
+    } catch (e: any) {
+      console.warn("Tertiary proxy (CodeTabs) failed", e.message);
+      errors.push(`CodeTabs: ${e.message}`);
+    }
   }
 
   // Strategy 4: ThingProxy (Backup)
-  try {
-    const response = await fetchWithTimeout(`https://thingproxy.freeboard.io/fetch/${cleanUrl}`);
-    const text = await response.text();
-    if (text && text.length > 50) return text;
-  } catch (e: any) {
-    console.warn("Quaternary proxy (ThingProxy) failed", e.message);
-    errors.push(`ThingProxy: ${e.message}`);
+  if (!fetchedHtml) {
+    try {
+      const response = await fetchWithTimeout(`https://thingproxy.freeboard.io/fetch/${cleanUrl}`);
+      const text = await response.text();
+      if (text && text.length > 50) fetchedHtml = text;
+    } catch (e: any) {
+      console.warn("Quaternary proxy (ThingProxy) failed", e.message);
+      errors.push(`ThingProxy: ${e.message}`);
+    }
+  }
+
+  if (fetchedHtml) {
+    // Apply the cleaning logic requested
+    return cleanHtmlContent(fetchedHtml);
   }
 
   throw new Error(`Không thể tải trang web này. Có thể do chặn Proxy hoặc Timeout.\nChi tiết lỗi: ${errors.join(' | ')}.\nGiải pháp: Hãy mở trang web, nhấn Ctrl+U, copy toàn bộ mã nguồn và dán vào ô bên dưới.`);
@@ -115,7 +149,7 @@ export const scanImageClasses = (html: string): DetectedClass[] => {
       example: data.example
     }))
     .sort((a, b) => b.count - a.count) // Descending order
-    .slice(0, 15); // Take top 15 most frequent
+    .slice(15); // Take top 15 most frequent
 };
 
 export const parseHtml = (config: ParseConfig): ExtractionResult => {
